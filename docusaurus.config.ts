@@ -15,7 +15,7 @@ const config: Config = {
     experimental_faster: true,
   },
   onBrokenLinks: "warn",
-  favicon: "img/favicon.ico",
+  favicon: "favicon.ico",
   trailingSlash: false,
   organizationName: "NCUHOME",
   projectName: "ncubook",
@@ -68,7 +68,7 @@ const config: Config = {
       title: "南昌大学生存手册",
       logo: {
         alt: "图标",
-        src: "img/logo.svg",
+        src: "favicon.ico",
       },
       items: [
         {
@@ -95,11 +95,11 @@ const config: Config = {
           items: [
             {
               label: "南昌大学2025官方新生群",
-              href: "https://qm.qq.com/q/h7FonOyE0g",
+              href: "https://u.ncuos.com/freshman-qq",
             },
             {
               label: "2025家园工作室招新群",
-              href: "https://hr-qq-group.ncuos.com",
+              href: "https://u.ncuos.com/hr-qq-group",
             },
           ],
         },
@@ -113,7 +113,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} 南昌大学生存手册.`,
+      copyright: `Copyright © ${new Date().getFullYear()} 家园工作室 NCUHOME｜南昌大学生存手册`,
     },
     prism: {
       theme: prismThemes.github,
