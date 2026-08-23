@@ -71,15 +71,28 @@ export type StoredAnalyticsEvent = {
   created_at?: string;
 };
 
+export type AnalyticsTimeRange = "today" | "7d" | "30d" | "1y" | "all";
+
+export type DailyTrendPoint = {
+  date: string; // YYYY-MM-DD 或 MM-DD
+  label: string;
+  pv: number;
+  uv: number;
+};
+
 export type AnalyticsSummary = {
+  timeRange?: AnalyticsTimeRange;
   todayPv: number;
   todayUv: number;
-  totalPv?: number;
-  totalUv?: number;
+  periodPv: number;
+  periodUv: number;
+  totalPv: number;
+  totalUv: number;
   totalSearches: number;
   zeroResultSearches: number;
   totalAiAsks: number;
   totalContactCopies: number;
+  trends: DailyTrendPoint[];
   topArticles: Array<{
     slug: string;
     title: string;

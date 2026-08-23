@@ -93,8 +93,15 @@ describe("document-grouped search algorithm", () => {
     expect(result).not.toHaveProperty("answer");
   });
 
+  it("recalls documents using NCU synonym expansion (e.g. 校车出行 -> 环游车)", () => {
+    const results = searchGroupedEntries("校车出行", searchIndexFixture, repo.resolvePageRoute);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.pageTitle).toBe("校园环游车乘坐指南");
+  });
+
   it("returns no results for an empty query", () => {
     expect(searchGroupedEntries("   ", searchIndexFixture, repo.resolvePageRoute)).toEqual([]);
     expect(searchEntries("   ", searchIndexFixture, repo.resolvePageRoute)).toEqual([]);
   });
 });
+

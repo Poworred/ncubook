@@ -62,12 +62,18 @@ describe("admin dashboard component suite", () => {
               Promise.resolve({
                 ok: true,
                 data: {
+                  timeRange: "7d",
                   todayPv: 120,
                   todayUv: 45,
+                  periodPv: 120,
+                  periodUv: 45,
+                  totalPv: 450,
+                  totalUv: 180,
                   totalSearches: 88,
                   zeroResultSearches: 3,
                   totalAiAsks: 26,
                   totalContactCopies: 14,
+                  trends: [{ date: "2026-08-20", label: "08/20", pv: 120, uv: 45 }],
                   topArticles: [{ slug: "xinsheng", title: "新生必看指南", views: 50 }],
                   topSearchQueries: [{ query: "体测", count: 20, zeroResult: false }],
                   zeroResultQueries: [{ query: "游泳馆", count: 3, lastSearchedAt: "2026-08-20T12:00:00Z" }],
@@ -118,12 +124,18 @@ describe("admin dashboard component suite", () => {
 
   it("renders AnalyticsDashboard with metrics, readable titles and events", async () => {
     const mockSummary = {
+      timeRange: "7d" as const,
       todayPv: 120,
       todayUv: 45,
+      periodPv: 120,
+      periodUv: 45,
+      totalPv: 450,
+      totalUv: 180,
       totalSearches: 88,
       zeroResultSearches: 3,
       totalAiAsks: 26,
       totalContactCopies: 14,
+      trends: [{ date: "2026-08-20", label: "08/20", pv: 120, uv: 45 }],
       topArticles: [
         {
           slug: "xinsheng",
@@ -151,10 +163,10 @@ describe("admin dashboard component suite", () => {
       render(<AnalyticsDashboard initialSummary={mockSummary} />);
     });
     expect(screen.getByText("全站数据洞察与埋点大盘")).toBeDefined();
-    expect(screen.getByText("今日访问 (PV / UV)")).toBeDefined();
-    expect(screen.getByText("搜索使用总量")).toBeDefined();
-    expect(screen.getByText("AI 问答提问量")).toBeDefined();
-    expect(screen.getByText("电话/服务复制转化")).toBeDefined();
+    expect(screen.getByText("全站历史总浏览")).toBeDefined();
+    expect(screen.getByText("区间搜索使用")).toBeDefined();
+    expect(screen.getByText("AI 问答提问")).toBeDefined();
+    expect(screen.getByText("服务联系复制")).toBeDefined();
     expect(screen.getByText("新生必看指南")).toBeDefined();
     expect(screen.getByText("最近实时学生行为流水")).toBeDefined();
   });

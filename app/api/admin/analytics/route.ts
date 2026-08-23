@@ -63,17 +63,54 @@ export async function GET(request: Request) {
     }
   }
 
-  // 3. 统计聚合指标
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  // 解析时间筛选范围参数 (today | 7d | 30d | 1y | all)
+  const url = new URL(request.url);
+  const timeRangeParam = (url.searchParams.get("timeRange") || "7d").toLowerCase();
+  const timeRange: "today" | "7d" | "30d" | "1y" | "all" =
+    timeRangeParam === "today" || timeRangeParam === "7d" || timeRangeParam === "30d" || timeRangeParam === "1y" || timeRangeParam === "all"
+      ? timeRangeParam
+      : "7d";
+
+  // 计算时间过滤边界
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayStartIso = todayStart.toISOString();
 
+  let cutoffDate = new Date(0);
+  if (timeRange === "today") {
+    cutoffDate = todayStart;
+  } else if (timeRange === "7d") {
+    cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  } else if (timeRange === "30d") {
+    cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  } else if (timeRange === "1y") {
+    cutoffDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  }
+  const cutoffIso = cutoffDate.toISOString();
+
+  // 3. 统计聚合指标
   let todayPv = 0;
   const todaySessions = new Set<string>();
+  let periodPv = 0;
+  const periodSessions = new Set<string>();
   let totalSearches = 0;
   let zeroResultSearches = 0;
   let totalAiAsks = 0;
   let totalContactCopies = 0;
+
+  // 趋势图聚合数据字典 (Key: YYYY-MM-DD 或 YYYY-MM)
+  const trendBuckets: Record<string, { label: string; pv: number; sessions: Set<string> }> = {};
+
+  // 预初始化近 7 天或近 30 天的连续空数据桶，保证图表连续平滑
+  const trendDays = timeRange === "today" ? 7 : timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 0;
+  if (trendDays > 0) {
+    for (let i = trendDays - 1; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const label = `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+      trendBuckets[key] = { label, pv: 0, sessions: new Set() };
+    }
+  }
 
   const articleViewCounts: Record<
     string,
@@ -83,22 +120,56 @@ export async function GET(request: Request) {
 
   for (const ev of rawEvents) {
     const isToday = ev.created_at >= todayStartIso;
+    const inPeriod = ev.created_at >= cutoffIso;
+
+    // 填充趋势图点
+    if (ev.event_name === "page_view") {
+      const evDate = new Date(ev.created_at);
+      let trendKey = "";
+      let trendLabel = "";
+
+      if (timeRange === "1y" || timeRange === "all") {
+        trendKey = `${evDate.getFullYear()}-${String(evDate.getMonth() + 1).padStart(2, "0")}`;
+        trendLabel = `${evDate.getFullYear()}/${String(evDate.getMonth() + 1).padStart(2, "0")}`;
+      } else {
+        trendKey = `${evDate.getFullYear()}-${String(evDate.getMonth() + 1).padStart(2, "0")}-${String(evDate.getDate()).padStart(2, "0")}`;
+        trendLabel = `${String(evDate.getMonth() + 1).padStart(2, "0")}/${String(evDate.getDate()).padStart(2, "0")}`;
+      }
+
+      if (trendKey) {
+        let bucket = trendBuckets[trendKey];
+        if (!bucket) {
+          bucket = { label: trendLabel, pv: 0, sessions: new Set() };
+          trendBuckets[trendKey] = bucket;
+        }
+        bucket.pv++;
+        bucket.sessions.add(ev.session_id);
+      }
+    }
 
     if (ev.event_name === "page_view") {
       if (isToday) {
         todayPv++;
         todaySessions.add(ev.session_id);
       }
-      const rawSlug = (ev.event_data?.slug as string) || (ev.event_data?.path as string) || "首页";
-      const meta = resolveArticleMeta(articleLookup, rawSlug);
+      if (inPeriod) {
+        periodPv++;
+        periodSessions.add(ev.session_id);
+      }
 
-      const title = meta?.title || (ev.event_data?.pageTitle as string) || (rawSlug === "/" ? "首页" : rawSlug);
-      const sectionTitle = meta?.sectionTitle;
-      const routePath = meta?.routePath || (rawSlug.startsWith("/") ? rawSlug : `/docs/${rawSlug}`);
-      const notionUrl = meta?.notionUrl;
-      const groupKey = meta?.slug || rawSlug.replace(/^\/docs\//, "").replace(/^\/sections\//, "");
+      const rawSlug = String((ev.event_data?.slug as string) || (ev.event_data?.path as string) || "").trim();
+      const cleanSlug = rawSlug.toLowerCase();
+      const isHomepage = cleanSlug === "/" || cleanSlug === "home" || cleanSlug === "首页" || cleanSlug === "" || cleanSlug === "/home";
 
-      if (rawSlug && rawSlug !== "/") {
+      // 严格排除非文章入口
+      if (!isHomepage && inPeriod) {
+        const meta = resolveArticleMeta(articleLookup, rawSlug);
+        const title = meta?.title || (ev.event_data?.pageTitle as string) || rawSlug;
+        const sectionTitle = meta?.sectionTitle;
+        const routePath = meta?.routePath || (rawSlug.startsWith("/") ? rawSlug : `/docs/${rawSlug}`);
+        const notionUrl = meta?.notionUrl;
+        const groupKey = meta?.slug || rawSlug.replace(/^\/docs\//, "").replace(/^\/sections\//, "");
+
         if (!articleViewCounts[groupKey]) {
           articleViewCounts[groupKey] = {
             title,
@@ -110,7 +181,7 @@ export async function GET(request: Request) {
         }
         articleViewCounts[groupKey].count++;
       }
-    } else if (ev.event_name === "search_query") {
+    } else if (ev.event_name === "search_query" && inPeriod) {
       totalSearches++;
       const q = String(ev.event_data?.query || "").trim();
       const count = Number(ev.event_data?.resultCount ?? 0);
@@ -123,9 +194,9 @@ export async function GET(request: Request) {
         }
         queryCounts[q].count++;
       }
-    } else if (ev.event_name === "ai_ask_submitted") {
+    } else if (ev.event_name === "ai_ask_submitted" && inPeriod) {
       totalAiAsks++;
-    } else if (ev.event_name === "contact_copied") {
+    } else if (ev.event_name === "contact_copied" && inPeriod) {
       totalContactCopies++;
     }
   }
@@ -159,15 +230,29 @@ export async function GET(request: Request) {
   const totalPv = rawEvents.filter((e) => e.event_name === "page_view").length;
   const totalUv = new Set(rawEvents.map((e) => e.session_id)).size;
 
+  // 组装趋势图有序点
+  const trends = Object.entries(trendBuckets)
+    .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+    .map(([date, bucket]) => ({
+      date,
+      label: bucket.label,
+      pv: bucket.pv,
+      uv: bucket.sessions.size,
+    }));
+
   const summary: AnalyticsSummary = {
+    timeRange,
     todayPv,
     todayUv: todaySessions.size,
+    periodPv,
+    periodUv: periodSessions.size,
     totalPv,
     totalUv,
     totalSearches,
     zeroResultSearches,
     totalAiAsks,
     totalContactCopies,
+    trends,
     topArticles,
     topSearchQueries,
     zeroResultQueries,

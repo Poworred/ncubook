@@ -128,7 +128,33 @@ export function groupSqlSearchSegments(
 }
 
 /**
- * 行业标准文档级聚合搜索算法（用于客户端纯文本搜索或 Fixture 降级搜索）
+ * 南昌大学专属校园高频口语词/同义词映射表 (NCU Synonym & Alias Map)
+ */
+export const NCU_SYNONYMS: Record<string, string[]> = {
+  校车: ["校内出行", "环游车", "校巴", "公交"],
+  校车出行: ["校内出行", "环游车", "校巴", "校车"],
+  环游车: ["校内出行", "校车", "校巴"],
+  健身: ["体育锻炼", "游泳馆", "室内体育馆", "体测", "体育课"],
+  健身房: ["室内体育馆", "游泳馆", "体育锻炼"],
+  跑步: ["校园跑", "体测", "体育课"],
+  网费: ["校园网", "宽带", "网络办理"],
+  宽带: ["校园网", "宿舍网"],
+  断网: ["校园网", "网络报修"],
+  快递: ["快递收发", "菜鸟驿站", "丰巢"],
+  外卖: ["外卖柜", "食堂"],
+  看病: ["校医院", "医保", "学生医保", "挂号"],
+  校医: ["校医院", "门诊"],
+  医保: ["学生医保", "校医院", "医疗报销"],
+  学费: ["财务缴费", "学费缴纳", "校园卡"],
+  转专业: ["转专业流程", "学籍变动"],
+  保研: ["推免", "研究生保送"],
+  重修: ["选课", "缓考", "补考"],
+  作息: ["作息时间", "作息表", "校车时刻表"],
+  保卫处: ["保卫处", "报警电话", "保卫部"],
+};
+
+/**
+ * 行业标准文档级聚合搜索算法（用于客户端纯文本搜索、同义词扩展与 Fixture 降级搜索）
  */
 export function searchGroupedEntries(
   query: string,
@@ -137,6 +163,29 @@ export function searchGroupedEntries(
 ): GroupedSearchResult[] {
   const needle = query.trim().toLocaleLowerCase("zh-CN");
   if (!needle) return [];
+
+  // 1. 生成查询词及同义扩展词集
+  const primaryNeedle = needle;
+  const expandedNeedles = new Set<string>([primaryNeedle]);
+
+  for (const [key, synonyms] of Object.entries(NCU_SYNONYMS)) {
+    const keyLower = key.toLocaleLowerCase("zh-CN");
+    if (primaryNeedle.includes(keyLower) || keyLower.includes(primaryNeedle)) {
+      for (const syn of synonyms) {
+        expandedNeedles.add(syn.toLocaleLowerCase("zh-CN"));
+      }
+    }
+  }
+
+  // 若查询长度大于等于 4，补充双字子串切分 (如 "校车出行" -> "校车", "出行")
+  if (primaryNeedle.length >= 4) {
+    for (let i = 0; i <= primaryNeedle.length - 2; i += 2) {
+      const sub = primaryNeedle.slice(i, i + 2);
+      if (sub.length >= 2) expandedNeedles.add(sub);
+    }
+  }
+
+  const allNeedles = Array.from(expandedNeedles);
 
   // 按 pageId 分组聚合
   const pageMap = new Map<
@@ -172,31 +221,51 @@ export function searchGroupedEntries(
 
   for (const group of pageMap.values()) {
     const pageTitleLower = group.pageTitle.toLocaleLowerCase("zh-CN");
-    const isExactTitle = pageTitleLower === needle;
-    const isPrefixTitle = pageTitleLower.startsWith(needle);
-    const isTitleMatch = pageTitleLower.includes(needle);
+    const isExactTitle = pageTitleLower === primaryNeedle;
+    const isPrefixTitle = pageTitleLower.startsWith(primaryNeedle);
+    const isPrimaryTitleMatch = pageTitleLower.includes(primaryNeedle);
+
+    // 检查是否有同义扩展词命中标题
+    const isExpandedTitleMatch = !isPrimaryTitleMatch && allNeedles.some((n) => pageTitleLower.includes(n));
+    const isTitleMatch = isPrimaryTitleMatch || isExpandedTitleMatch;
 
     let titleScore = 0;
     if (isExactTitle) titleScore = 120;
     else if (isPrefixTitle) titleScore = 90;
-    else if (isTitleMatch) titleScore = 60;
+    else if (isPrimaryTitleMatch) titleScore = 60;
+    else if (isExpandedTitleMatch) titleScore = 40;
 
     const matchingSnippets: SearchSnippet[] = [];
     let maxContentScore = 0;
+    const matchedAnchors = new Set<string>();
 
     for (const entry of group.entries) {
       const textLower = entry.plainText.toLocaleLowerCase("zh-CN");
-      const matched = textLower.includes(needle);
 
-      if (matched) {
+      // 优先检查主查询词，其次检查扩展词
+      let matchedNeedle = "";
+      if (textLower.includes(primaryNeedle)) {
+        matchedNeedle = primaryNeedle;
+      } else {
+        for (const n of allNeedles) {
+          if (textLower.includes(n)) {
+            matchedNeedle = n;
+            break;
+          }
+        }
+      }
+
+      if (matchedNeedle && !matchedAnchors.has(entry.anchor)) {
+        matchedAnchors.add(entry.anchor);
         const isHeading = entry.blockType === "heading";
-        const contentScore = isHeading ? 45 : 20;
+        const isPrimary = matchedNeedle === primaryNeedle;
+        const contentScore = isHeading ? (isPrimary ? 45 : 30) : isPrimary ? 20 : 12;
         if (contentScore > maxContentScore) maxContentScore = contentScore;
 
         matchingSnippets.push({
           anchor: entry.anchor,
           headingPath: entry.sectionPath.slice(1).map(cleanHeadingPunctuation),
-          text: extractSnippet(entry.plainText, needle),
+          text: extractSnippet(entry.plainText, matchedNeedle),
           isHeading,
         });
       }
@@ -260,3 +329,4 @@ export function searchEntries(
 
   return flat;
 }
+

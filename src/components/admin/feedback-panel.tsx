@@ -1,5 +1,5 @@
 // 组件：管理后台用户反馈监控与 Linear 风格工单化聚合系统 (FeedbackPanel)
-// 支持按文章智能合并聚合、四级状态流转 (待处理/已解决/归档/忽略)、一键直通前台预览与 Notion 编辑
+// 支持按文章智能合并聚合、四级状态双向流转 (待处理/已解决/归档/重新打开)、一键学生端核对与 Notion 编辑
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -18,6 +18,8 @@ import {
   FileText,
   Clock,
   Sparkles,
+  RotateCcw,
+  Bot,
 } from "lucide-react";
 import { getFeishuAdminWikiUrl } from "@/lib/feishu";
 import type { FeedbackStatus } from "@/app/api/admin/feedbacks/route";
@@ -99,7 +101,7 @@ export function FeedbackPanel() {
     fetchFeedbacks();
   }, []);
 
-  // 工单状态变更
+  // 工单状态变更（支持即时更新局部 stats 计数）
   const handleUpdateStatus = async (ids: string[], newStatus: FeedbackStatus) => {
     if (ids.length === 0) return;
     setActionLoadingId(ids.join(","));
@@ -111,9 +113,27 @@ export function FeedbackPanel() {
       });
       const data = await res.json();
       if (data?.ok) {
-        setList((prev) =>
-          prev.map((item) => (ids.includes(item.id) ? { ...item, status: newStatus } : item)),
-        );
+        setList((prev) => {
+          const nextList = prev.map((item) => (ids.includes(item.id) ? { ...item, status: newStatus } : item));
+          const pending = nextList.filter((i) => i.status === "pending" && !i.is_helpful).length;
+          const resolved = nextList.filter((i) => i.status === "resolved").length;
+          const archived = nextList.filter((i) => i.status === "archived").length;
+          const unhelpful = nextList.filter((i) => !i.is_helpful).length;
+          const total = nextList.length;
+          const helpful = nextList.filter((i) => i.is_helpful).length;
+          const helpfulRate = total > 0 ? `${Math.round((helpful / total) * 100)}%` : "100%";
+
+          setStats({
+            total,
+            helpful,
+            unhelpful,
+            pending,
+            resolved,
+            archived,
+            helpfulRate,
+          });
+          return nextList;
+        });
         setSelectedIds(new Set());
       }
     } catch {
@@ -206,7 +226,7 @@ export function FeedbackPanel() {
             <h2 className="text-title font-semibold text-ink">用户反馈与好评监控工单</h2>
           </div>
           <p className="text-caption text-muted mt-s1">
-            聚合学生对各篇指南与 AI 问答的有用性反馈，支持工单归档、一键学生端核对与 Notion 编辑
+            聚合学生对各篇指南与 AI 问答的有用性反馈，支持工单闭环流转、一键学生端核对与 Notion 编辑
           </p>
         </div>
         <div className="flex items-center gap-s2">
@@ -219,38 +239,74 @@ export function FeedbackPanel() {
             <span>飞书 Wiki 反馈表</span>
             <ExternalLink className="size-icon-small" />
           </a>
+
           <button
             type="button"
             onClick={fetchFeedbacks}
             disabled={loading}
-            className="focus-ring tap-target flex items-center gap-s1 rounded-small bg-surface border border-line px-s3 py-s2 text-caption font-medium text-ink hover:bg-surface-subtle transition-colors disabled:opacity-60"
+            className="focus-ring tap-target flex items-center gap-s1 rounded-small border border-line bg-surface px-s3 py-s2 text-caption font-medium hover:bg-surface-subtle transition-colors disabled:opacity-60"
           >
             <RefreshCw className={`size-icon-small ${loading ? "animate-spin text-brand" : ""}`} />
-            <span>{loading ? "正在刷新..." : "刷新"}</span>
+            <span>{loading ? "刷新中..." : "刷新"}</span>
           </button>
         </div>
       </div>
 
       {/* 4 大核心统计指标卡 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-s4">
+        {/* 卡片 1：总收集反馈 */}
         <div className="rounded-medium border border-line bg-surface p-s4 space-y-s1">
           <span className="text-caption text-muted">总收集反馈</span>
           <div className="text-display font-bold text-ink">{stats.total}</div>
           <span className="text-caption text-muted">包含文章与 AI 问答</span>
         </div>
+
+        {/* 卡片 2：总体好评率 */}
         <div className="rounded-medium border border-line bg-brand-tint p-s4 space-y-s1">
-          <span className="text-caption text-brand">总体好评率</span>
+          <span className="text-caption text-brand font-medium">总体好评率</span>
           <div className="text-display font-bold text-brand">{stats.helpfulRate}</div>
           <span className="text-caption text-brand font-medium">学生满意度</span>
         </div>
-        <div className="rounded-medium border border-danger bg-danger-bg p-s4 space-y-s1">
-          <div className="flex items-center justify-between text-danger">
-            <span className="text-caption font-semibold">待处理差评 (待修正)</span>
-            <ThumbsDown className="size-icon-small" />
+
+        {/* 卡片 3：待处理差评（严格绑定 stats.pending，消除割裂） */}
+        <div
+          className={`rounded-medium border p-s4 space-y-s1 transition-colors ${
+            stats.pending > 0
+              ? "border-danger bg-danger-bg"
+              : "border-brand bg-brand-tint"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span
+              className={`text-caption font-semibold ${
+                stats.pending > 0 ? "text-danger" : "text-brand"
+              }`}
+            >
+              {stats.pending > 0 ? "待处理差评 (待修正)" : "待处理工单"}
+            </span>
+            {stats.pending > 0 ? (
+              <ThumbsDown className="size-icon-small text-danger" />
+            ) : (
+              <CheckCircle2 className="size-icon-small text-brand" />
+            )}
           </div>
-          <div className="text-display font-bold text-danger">{stats.unhelpful}</div>
-          <span className="text-caption text-danger">急需去 Notion 核对</span>
+          <div
+            className={`text-display font-bold ${
+              stats.pending > 0 ? "text-danger" : "text-brand"
+            }`}
+          >
+            {stats.pending}
+          </div>
+          <span
+            className={`text-caption ${
+              stats.pending > 0 ? "text-danger font-medium" : "text-brand font-medium"
+            }`}
+          >
+            {stats.pending > 0 ? "急需去 Notion 核对修改" : "🎉 差评已全部处理完毕"}
+          </span>
         </div>
+
+        {/* 卡片 4：有用点赞 */}
         <div className="rounded-medium border border-line bg-surface p-s4 space-y-s1">
           <div className="flex items-center justify-between text-brand">
             <span className="text-caption font-medium">有用点赞</span>
@@ -263,10 +319,10 @@ export function FeedbackPanel() {
 
       {/* 工单视图与过滤控制器 */}
       <div className="flex flex-wrap items-center justify-between gap-s3 border-b border-line pb-s3">
-        {/* 状态分类标签 Tab */}
+        {/* 状态分类标签 Tab (待处理计数准确对齐 stats.pending) */}
         <div className="flex items-center gap-s2 overflow-x-auto no-scrollbar">
           {[
-            { key: "pending", label: "待处理 (需优化)", count: stats.unhelpful },
+            { key: "pending", label: "待处理 (需优化)", count: stats.pending },
             { key: "all", label: "全部反馈", count: stats.total },
             { key: "resolved", label: "已标记解决", count: stats.resolved },
             { key: "archived", label: "已归档", count: stats.archived },
@@ -352,13 +408,15 @@ export function FeedbackPanel() {
             <div className="rounded-medium border border-line bg-surface p-s8 text-center text-muted">
               <CheckCircle2 className="size-icon mx-auto mb-s2 text-brand" />
               <p className="text-body font-medium text-ink">当前分类下暂无待处理工单</p>
-              <p className="text-caption text-muted mt-s1">校园指南运行良好，点赞反馈将实时同步</p>
+              <p className="text-caption text-muted mt-s1">校园指南运行良好，点赞与反馈将实时保持同步</p>
             </div>
           ) : (
             filteredIssues.map((issue) => {
               const targetKey = `${issue.targetType}-${issue.targetId}`;
               const isExpanded = expandedTargets.has(targetKey);
               const allItemIds = issue.items.map((i) => i.id);
+              const isAllResolved = issue.items.every((i) => i.status === "resolved");
+              const isAllArchived = issue.items.every((i) => i.status === "archived");
 
               return (
                 <div
@@ -374,8 +432,8 @@ export function FeedbackPanel() {
                             文章
                           </span>
                         ) : (
-                          <span className="rounded-pill bg-surface-subtle border border-line px-s2 py-s1 text-caption font-bold text-brand">
-                            AI 智能问答
+                          <span className="rounded-pill bg-surface-subtle border border-line px-s2 py-s1 text-caption font-bold text-brand flex items-center gap-s1">
+                            <Bot className="size-icon-small" /> AI 智能问答
                           </span>
                         )}
 
@@ -392,6 +450,17 @@ export function FeedbackPanel() {
                         <span className="text-caption text-muted font-mono">
                           ({issue.targetId})
                         </span>
+
+                        {isAllResolved && (
+                          <span className="rounded-pill bg-brand-tint border border-brand px-s2 py-s0.5 text-caption font-semibold text-brand">
+                            ✓ 已标记解决
+                          </span>
+                        )}
+                        {isAllArchived && (
+                          <span className="rounded-pill bg-surface-subtle border border-line px-s2 py-s0.5 text-caption font-semibold text-muted">
+                            已归档
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-s3 text-caption text-muted">
@@ -448,15 +517,29 @@ export function FeedbackPanel() {
                         </a>
                       )}
 
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateStatus(allItemIds, "resolved")}
-                        disabled={actionLoadingId !== null}
-                        className="focus-ring tap-target flex items-center gap-s1 rounded-small bg-brand px-s3 py-s1.5 text-caption font-semibold text-surface hover:bg-brand-dark transition-colors"
-                      >
-                        <CheckCircle2 className="size-icon-small" />
-                        <span>标记已解决</span>
-                      </button>
+                      {/* 动态标记解决 / 重新打开操作 */}
+                      {isAllResolved ? (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateStatus(allItemIds, "pending")}
+                          disabled={actionLoadingId !== null}
+                          className="focus-ring tap-target flex items-center gap-s1 rounded-small border border-line bg-surface px-s2.5 py-s1.5 text-caption font-medium text-muted hover:text-ink hover:bg-surface-subtle transition-colors"
+                          title="重新将该工单置为待处理"
+                        >
+                          <RotateCcw className="size-icon-small" />
+                          <span>重新打开</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateStatus(allItemIds, "resolved")}
+                          disabled={actionLoadingId !== null}
+                          className="focus-ring tap-target flex items-center gap-s1 rounded-small bg-brand px-s3 py-s1.5 text-caption font-semibold text-surface hover:bg-brand-dark transition-colors"
+                        >
+                          <CheckCircle2 className="size-icon-small" />
+                          <span>标记已解决</span>
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -625,10 +708,16 @@ export function FeedbackPanel() {
                       >
                         标记已解决
                       </button>
+                    ) : item.status === "resolved" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateStatus([item.id], "pending")}
+                        className="focus-ring rounded-small border border-line px-s2 py-s1 text-caption text-muted hover:text-ink hover:bg-surface-subtle"
+                      >
+                        已解决 (点此重开)
+                      </button>
                     ) : (
-                      <span className="text-caption text-muted">
-                        {item.status === "resolved" ? "已解决" : "已归档"}
-                      </span>
+                      <span className="text-caption text-muted">已归档</span>
                     )}
                   </div>
                 </div>
