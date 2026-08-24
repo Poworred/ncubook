@@ -1,0 +1,171 @@
+// 组件：管理全站 AI 问答会话、弹层显示状态、会话历史恢复 (sessionStorage) 与 Context / useAsk 钩子 (S4 合并)
+"use client";
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { validateAnswerSession, type AnswerSession } from "@/lib/ai/session";
+import { resolvePageRoute as defaultResolvePageRoute } from "@/lib/content/fixture";
+import { trackEvent } from "@/lib/analytics/client";
+import { AskSheet } from "@/src/components/ask/sheet";
+
+export type PageContext = { pageId: string; anchor?: string };
+export type AskInput = { question?: string; pageContext?: PageContext };
+export type AnswerRequest = (input: { question: string; pageContext?: PageContext }) => Promise<AnswerSession>;
+export type AskStatus = "idle" | "loading" | "ready" | "error";
+
+export type AskContextValue = {
+  openAsk: (input: AskInput) => void;
+  draft: string;
+  setDraft: (value: string) => void;
+};
+
+export const AskContext = createContext<AskContextValue | null>(null);
+
+export function useAsk() {
+  const context = useContext(AskContext);
+  if (!context) throw new Error("useAsk must be used inside AskProvider");
+  return context;
+}
+
+async function requestAnswerFromApi(input: { question: string; pageContext?: PageContext }): Promise<AnswerSession> {
+  const response = await fetch("/api/ask", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    if (response.status === 429) throw new Error("提问过于频繁，请稍候再试。");
+    if (response.status === 503) throw new Error("AI 服务响应超时或暂时不可用，请稍候重试。");
+    throw new Error("回答暂时无法获取，请稍候重试。");
+  }
+  return response.json() as Promise<AnswerSession>;
+}
+
+export function AskProvider({
+  children,
+  requestAnswer = requestAnswerFromApi,
+  resolvePageRoute = defaultResolvePageRoute,
+}: {
+  children: ReactNode;
+  requestAnswer?: AnswerRequest;
+  resolvePageRoute?: (pageId: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sheetMounted, setSheetMounted] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [pageContext, setPageContext] = useState<PageContext | undefined>();
+  const [draft, setDraft] = useState("");
+  const [status, setStatus] = useState<AskStatus>("idle");
+  const [session, setSession] = useState<AnswerSession | null>(null);
+  const [error, setError] = useState("");
+
+  const openSheet = useCallback(() => {
+    setSheetMounted(true);
+    setOpen(true);
+  }, []);
+
+  const submit = useCallback(async (input: { question: string; pageContext?: PageContext }) => {
+    const value = input.question.trim();
+    if (!value) return;
+    setQuestion(value);
+    setPageContext(input.pageContext);
+    openSheet();
+    setStatus("loading");
+    setSession(null);
+    setError("");
+
+    trackEvent("ai_ask_submitted", {
+      questionPreview: value.slice(0, 100),
+      source: input.pageContext ? "doc" : "fab",
+      docSlug: input.pageContext?.pageId,
+    });
+    try {
+      const nextSession = validateAnswerSession(await requestAnswer({ question: value, pageContext: input.pageContext }));
+      setSession(nextSession);
+      setStatus("ready");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "回答暂时无法获取");
+      setStatus("error");
+    }
+  }, [requestAnswer, openSheet]);
+
+  useEffect(() => {
+    function restoreState(state: unknown) {
+      const answerSession = (state as { answerSession?: string } | null)?.answerSession;
+      if (!answerSession) return;
+      const serialized = sessionStorage.getItem(`answer-session:${answerSession}`);
+      if (!serialized) return;
+      try {
+        const saved = JSON.parse(serialized) as { session: AnswerSession; scrollY: number; draft: string };
+        const restored = validateAnswerSession(saved.session);
+        setQuestion(restored.question);
+        setPageContext(restored.pageContext);
+        setDraft(saved.draft);
+        setSession(restored);
+        setStatus("ready");
+        openSheet();
+        window.setTimeout(() => window.scrollTo({ top: saved.scrollY }), 0);
+      } catch {
+        sessionStorage.removeItem(`answer-session:${answerSession}`);
+      }
+    }
+
+    function restore(event: PopStateEvent) {
+      restoreState(event.state);
+    }
+
+    function restoreCurrentEntry() {
+      restoreState(window.history.state);
+    }
+
+    restoreCurrentEntry();
+    window.addEventListener("popstate", restore);
+    window.addEventListener("pageshow", restoreCurrentEntry);
+    return () => {
+      window.removeEventListener("popstate", restore);
+      window.removeEventListener("pageshow", restoreCurrentEntry);
+    };
+  }, [openSheet]);
+
+  const persistSession = useCallback(() => {
+    if (!session) return;
+    sessionStorage.setItem(`answer-session:${session.id}`, JSON.stringify({ session, scrollY: window.scrollY, draft }));
+    window.history.replaceState({ ...window.history.state, answerSession: session.id }, "");
+  }, [draft, session]);
+
+  const value = useMemo<AskContextValue>(() => ({
+    draft,
+    setDraft,
+    openAsk(input) {
+      setPageContext(input.pageContext);
+      openSheet();
+      const nextQuestion = input.question?.trim() ?? "";
+      setQuestion(nextQuestion);
+      setSession(null);
+      setStatus("idle");
+      setError("");
+      if (nextQuestion) void submit({ question: nextQuestion, pageContext: input.pageContext });
+    },
+  }), [draft, submit, openSheet]);
+
+  return (
+    <AskContext.Provider value={value}>
+      {children}
+      {sheetMounted ? (
+        <AskSheet
+          open={open}
+          onOpenChange={setOpen}
+          question={question}
+          pageContext={pageContext}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSubmit={(nextQuestion) => submit({ question: nextQuestion, pageContext })}
+          status={status}
+          session={session}
+          error={error}
+          onCitationNavigate={persistSession}
+          resolvePageRoute={resolvePageRoute}
+        />
+      ) : null}
+    </AskContext.Provider>
+  );
+}

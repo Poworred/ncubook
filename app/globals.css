@@ -1,0 +1,252 @@
+/* 全局样式表：统一定义 tokens.json 对应的 CSS 原生变量、Tailwind v4 主题映射与全局排版重置 */
+@import "tailwindcss";
+
+:root {
+  --canvas: #ffffff;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --text: #111111;
+  --text-body: #333333;
+  --text-sub: #555555;
+  --text-muted: #767676;
+  --text-light: #999999;
+  --border: #ececec;
+  --border-mid: #dcdcdc;
+  --action: #111111;
+  --action-subtle: #f2f2f2;
+  --brand-blue: #66ccff;
+  --brand-cyan: #66ccff;
+  --brand-blue-hover: #4db8ff;
+  --brand-blue-subtle: rgba(102, 204, 255, 0.16);
+  --brand-blue-tint: #f0f9ff;
+  --info: #66ccff;
+  --info-bg: #f7f9fb;
+  --warning: #f59e0b;
+  --danger: #dc2626;
+  --danger-bg: #fee2e2;
+  --focus: #111111;
+  --accent: #111111;
+  --alert: #dc2626;
+  --font-family-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-family-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-family-display: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --font-size-caption: 12px;
+  --font-size-label: 14px;
+  --font-size-body: 15px;
+  --font-size-body-large: 18px;
+  --font-size-title: 20px;
+  --font-size-heading: 24px;
+  --font-size-display: 28px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --line-height-ui: 1.4;
+  --line-height-body: 1.7;
+  --line-height-heading: 1.3;
+  --corner-small: 8px;
+  --corner-medium: 10px;
+  --corner-large: 14px;
+  --corner-card: 16px;
+  --corner-round: 9999px;
+  --corner-pill: 9999px;
+  --icon-small: 16px;
+  --icon: 18px;
+  --icon-medium: 20px;
+  --icon-large: 24px;
+  --size-mascot-fab: 50px;
+  --size-mascot-icon: 34px;
+  --tap-target: 44px;
+  --shell-max: 760px;
+  --size-status-avatar: 64px;
+  --size-status-card-max: 320px;
+  --size-modal-max-height: 82%;
+  --border-default: 1px;
+  --elevation-floating: 0 4px 16px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --elevation-subtle: 0 2px 8px rgba(17, 17, 17, 0.08);
+  --elevation-fab: 0 4px 16px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --elevation-drawer: 0 -8px 24px rgba(0, 0, 0, 0.14);
+  --elevation-side: 0 0 32px rgba(0, 0, 0, 0.16);
+  --layer-base: 0;
+  --layer-header: 20;
+  --layer-floating-action: 30;
+  --layer-search: 38;
+  --layer-drawer-overlay: 40;
+  --layer-side-drawer: 50;
+  --layer-ask-sheet: 60;
+  --layer-toast: 99;
+  --motion-fast: 120ms;
+  --motion-standard: 240ms;
+  --motion-highlight-flash: 1600ms;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-ink: var(--text);
+  --color-ink-body: var(--text-body);
+  --color-ink-sub: var(--text-sub);
+  --color-muted: var(--text-muted);
+  --color-light: var(--text-light);
+  --color-line: var(--border);
+  --color-line-mid: var(--border-mid);
+  --color-action: var(--action);
+  --color-action-subtle: var(--action-subtle);
+  --color-brand: var(--brand-blue);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-hover: var(--brand-blue-hover);
+  --color-brand-subtle: var(--brand-blue-subtle);
+  --color-brand-tint: var(--brand-blue-tint);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-focus: var(--focus);
+  --color-accent: var(--accent);
+  --color-alert: var(--alert);
+  --font-sans: var(--font-family-ui);
+  --font-body: var(--font-family-body);
+  --font-display: var(--font-family-display);
+  --spacing-s1: var(--space-1);
+  --spacing-s2: var(--space-2);
+  --spacing-s3: var(--space-3);
+  --spacing-s4: var(--space-4);
+  --spacing-s5: var(--space-5);
+  --spacing-s6: var(--space-6);
+  --spacing-s7: var(--space-7);
+  --spacing-icon-small: var(--icon-small);
+  --spacing-icon: var(--icon);
+  --spacing-icon-medium: var(--icon-medium);
+  --spacing-icon-large: var(--icon-large);
+  --spacing-tap: var(--tap-target);
+  --spacing-shell-max: var(--shell-max);
+  --spacing-status-avatar: var(--size-status-avatar);
+  --spacing-status-card-max: var(--size-status-card-max);
+  --text-caption: var(--font-size-caption);
+  --text-label: var(--font-size-label);
+  --text-body: var(--font-size-body);
+  --text-body-large: var(--font-size-body-large);
+  --text-title: var(--font-size-title);
+  --text-heading: var(--font-size-heading);
+  --text-display: var(--font-size-display);
+  --font-weight-regular: var(--weight-regular);
+  --font-weight-medium: var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+  --font-weight-bold: var(--weight-bold);
+  --leading-ui: var(--line-height-ui);
+  --leading-body: var(--line-height-body);
+  --leading-heading: var(--line-height-heading);
+  --radius-small: var(--corner-small);
+  --radius-medium: var(--corner-medium);
+  --radius-large: var(--corner-large);
+  --radius-card: var(--corner-card);
+  --radius-round: var(--corner-round);
+  --radius-pill: var(--corner-pill);
+  --border-width-default: var(--border-default);
+  --shadow-floating: var(--elevation-floating);
+  --shadow-subtle: var(--elevation-subtle);
+  --shadow-fab: var(--elevation-fab);
+  --shadow-drawer: var(--elevation-drawer);
+  --shadow-side: var(--elevation-side);
+  --duration-fast: var(--motion-fast);
+  --duration-standard: var(--motion-standard);
+}
+
+@utility z-base { z-index: var(--layer-base); }
+@utility z-header { z-index: var(--layer-header); }
+@utility z-floating-action { z-index: var(--layer-floating-action); }
+@utility z-search { z-index: var(--layer-search); }
+@utility z-drawer-overlay { z-index: var(--layer-drawer-overlay); }
+@utility z-side-drawer { z-index: var(--layer-side-drawer); }
+@utility z-ask-sheet { z-index: var(--layer-ask-sheet); }
+@utility z-toast { z-index: var(--layer-toast); }
+@utility z-drawer { z-index: var(--layer-side-drawer); }
+@utility z-modal { z-index: var(--layer-ask-sheet); }
+
+@utility text-accent { color: var(--accent); }
+@utility text-alert { color: var(--alert); }
+@utility rounded-pill { border-radius: var(--corner-pill); }
+@utility shadow-subtle { box-shadow: var(--elevation-subtle); }
+@utility max-w-shell { max-width: var(--shell-max); }
+@utility max-w-status-card { max-width: var(--size-status-card-max); }
+@utility size-status-avatar { width: var(--size-status-avatar); height: var(--size-status-avatar); }
+@utility max-h-sheet-content { max-height: var(--size-modal-max-height); }
+
+@keyframes flashHighlightAnim {
+  0% { background: rgba(31, 156, 240, 0.28); border-radius: 4px; }
+  100% { background: transparent; }
+}
+
+.flash-highlight {
+  animation: flashHighlightAnim 1.6s ease-out;
+}
+
+.toast-pill {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-10px);
+  background: rgba(17, 17, 17, 0.88);
+  backdrop-filter: blur(6px);
+  color: #ffffff;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-family: var(--font-family-ui);
+  z-index: var(--layer-toast);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.toast-pill.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--canvas);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-family-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+a.text-brand,
+button.text-brand,
+.text-brand,
+article a[href] {
+  color: var(--brand-blue);
+}
+a.text-brand:hover,
+button.text-brand:hover,
+.text-brand:hover,
+article a[href]:hover {
+  color: var(--brand-blue-hover);
+  text-decoration: underline;
+}
+button, input, textarea { font: inherit; }
+blockquote, figure { margin: 0; }
+.font-display { font-family: var(--font-family-display); }
+.font-body { font-family: var(--font-family-body); }
+.tap-target { min-width: var(--tap-target); min-height: var(--tap-target); }
+.focus-ring:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.safe-area-fab { right: var(--space-4); bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); }

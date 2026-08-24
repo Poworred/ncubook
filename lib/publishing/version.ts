@@ -1,0 +1,355 @@
+// Notion 发布引擎：内容版本控制状态机 (pending/staging/published/failed)、页面校验和 (checksum) 匹配与指针切换 (M-5)
+import { batchMap } from "@/lib/publishing/client";
+import { createHash } from "node:crypto";
+import { anchorFromSourceId, type Asset, type Block, type Page, type SearchIndexEntry } from "@/lib/content/schema";
+
+export type PagePublication = {
+  page: Page;
+  blocks: Block[];
+  assets: Asset[];
+  searchEntries: SearchIndexEntry[];
+};
+
+export type ChunkPublication = {
+  pages: Page[];
+  blocks: Block[];
+  assets: Asset[];
+  searchEntries: SearchIndexEntry[];
+};
+
+export type PublicationStage =
+  | "fetch"
+  | "transform"
+  | "mirror-assets"
+  | "search-index"
+  | "commit"
+  | "build"
+  | "stale-check"
+  | "validate";
+
+export type PublicationFailure = {
+  contentVersion: string;
+  sourcePageId?: string;
+  sourceBlockId?: string;
+  stage: PublicationStage;
+  reason: string;
+};
+
+export type PublicationCommit = {
+  contentVersion: string;
+  expectedCurrentVersion: string | null;
+  checksum: string;
+  summary?: Record<string, unknown>;
+};
+
+export type PublicationStore = {
+  getVersionStatus(contentVersion: string): Promise<"pending" | "staging" | "published" | "failed" | null>;
+  getCurrentVersion(): Promise<string | null>;
+  startVersion(input: { contentVersion: string; sourceRootId: string }): Promise<void>;
+  findPublishedVersionByChecksum(checksum: string): Promise<string | null>;
+  stageChunk(contentVersion: string, chunk: ChunkPublication): Promise<void>;
+  commitVersion(input: PublicationCommit): Promise<void>;
+  failVersion(failure: PublicationFailure): Promise<void>;
+  movePointer(targetVersion: string, expectedCurrentVersion: string | null): Promise<void>;
+};
+
+type PublishVersionInput = {
+  contentVersion: string;
+  sourceRootId: string;
+  sourcePageIds: string[];
+  store: PublicationStore;
+  buildPage(sourcePageId: string, contentVersion: string): Promise<PagePublication>;
+  readLastEditedTime(sourcePageId: string): Promise<string>;
+};
+
+export type PublishVersionResult = {
+  status: "published" | "already-published";
+  contentVersion: string;
+  checksum?: string;
+  pageCount?: number;
+};
+
+export class PointerConflictError extends Error {
+  constructor(
+    public readonly expectedVersion: string | null,
+    public readonly actualVersion: string | null,
+  ) {
+    super(`Published content pointer changed from ${expectedVersion ?? "empty"} to ${actualVersion ?? "empty"}`);
+    this.name = "PointerConflictError";
+  }
+}
+
+export async function publishVersion(input: PublishVersionInput): Promise<PublishVersionResult> {
+  requireValue(input.contentVersion, "Content version");
+  requireValue(input.sourceRootId, "Source root id");
+  if (new Set(input.sourcePageIds).size !== input.sourcePageIds.length) {
+    throw new Error("Source page ids must be unique");
+  }
+
+  if (await input.store.getVersionStatus(input.contentVersion) === "published") {
+    return { status: "already-published", contentVersion: input.contentVersion };
+  }
+
+  const expectedCurrentVersion = await input.store.getCurrentVersion();
+  await input.store.startVersion({ contentVersion: input.contentVersion, sourceRootId: input.sourceRootId });
+
+  const pages: PagePublication[] = [];
+  let stage: PublicationStage = "transform";
+
+  try {
+    const pageResults = await batchMap(input.sourcePageIds, 3, async (id) => {
+      try {
+        const result = await input.buildPage(id, input.contentVersion);
+        const latestEditedTime = await input.readLastEditedTime(id);
+        if (latestEditedTime !== result.page.lastEditedTime) {
+          throw new Error(`Notion page ${id} changed during publication`);
+        }
+        return result;
+      } catch (err) {
+        if (typeof err === "object" && err !== null && !("sourcePageId" in err)) {
+          Object.defineProperty(err, "sourcePageId", { value: id, enumerable: true });
+        }
+        throw err;
+      }
+    });
+    pages.push(...pageResults);
+
+    stage = "validate";
+    validatePublication(input.contentVersion, input.sourceRootId, pages);
+    const checksum = publicationChecksum(pages);
+
+    const duplicateVersion = await input.store.findPublishedVersionByChecksum(checksum);
+    if (duplicateVersion === input.contentVersion) {
+      return { status: "already-published", contentVersion: input.contentVersion, checksum, pageCount: pages.length };
+    }
+
+    // 分块暂存：按页分片暂存（单包 <= 300KB 大小守卫）
+    stage = "transform";
+    for (const bundle of pages) {
+      const chunks = splitPageIntoChunks(bundle);
+      for (const chunk of chunks) {
+        await input.store.stageChunk(input.contentVersion, chunk);
+      }
+    }
+
+    // 短事务切线
+    stage = "commit";
+    await input.store.commitVersion({
+      contentVersion: input.contentVersion,
+      checksum,
+      expectedCurrentVersion,
+      summary: {
+        pageCount: pages.length,
+        blockCount: pages.reduce((acc, p) => acc + p.blocks.length, 0),
+        assetCount: pages.reduce((acc, p) => acc + p.assets.length, 0),
+      },
+    });
+    return { status: "published", contentVersion: input.contentVersion, checksum, pageCount: pages.length };
+  } catch (error) {
+    const failureStage = mapToFailStage(stage);
+    const failure: PublicationFailure = {
+      contentVersion: input.contentVersion,
+      ...sourcePageIdFromError(error),
+      ...sourceBlockId(error),
+      stage: failureStage,
+      reason: errorMessage(error),
+    };
+    try {
+      await input.store.failVersion(failure);
+    } catch {
+      // The original publication error is the actionable failure and must not be replaced.
+    }
+    throw error;
+  }
+}
+
+export async function rollbackPublishedVersion(store: PublicationStore, targetVersion: string): Promise<void> {
+  if (await store.getVersionStatus(targetVersion) !== "published") {
+    throw new Error(`Content version ${targetVersion} is not published`);
+  }
+  const currentVersion = await store.getCurrentVersion();
+  if (currentVersion === targetVersion) return;
+  await store.movePointer(targetVersion, currentVersion);
+}
+
+function mapToFailStage(stage: PublicationStage): "fetch" | "transform" | "mirror-assets" | "search-index" | "commit" {
+  if (stage === "build" || stage === "stale-check" || stage === "validate") {
+    return "transform";
+  }
+  return stage;
+}
+
+function validatePublication(contentVersion: string, sourceRootId: string, pages: PagePublication[]): void {
+  if (pages.length === 0) throw new Error("Publication must contain at least one page");
+  const pageIds = new Set(pages.map(({ page }) => page.id));
+  if (pageIds.size !== pages.length) throw new Error("Publication contains duplicate pages");
+  const publishedAssetIds = new Set<string>();
+
+  for (const bundle of pages) {
+    const { page, blocks, assets, searchEntries } = bundle;
+    if (page.contentVersion !== contentVersion) throw new Error(`Page ${page.id} belongs to another content version`);
+    if (page.parentId && page.parentId !== sourceRootId && !pageIds.has(page.parentId)) {
+      throw new Error(`Page ${page.id} references missing parent page ${page.parentId}`);
+    }
+
+    const anchors = collectAnchors(blocks);
+    const assetIds = new Set(assets.map((asset) => asset.id));
+    const referencedAssetIds = new Set<string>();
+    if (assetIds.size !== assets.length) throw new Error(`Page ${page.id} contains duplicate assets`);
+
+    walkBlocks(blocks, (block) => {
+      if (block.type === "page-link" && !pageIds.has(block.pageId)) {
+        throw new Error(`Block ${block.id} references missing page ${block.pageId}`);
+      }
+      if ((block.type === "image" || block.type === "file") && !assetIds.has(block.assetId)) {
+        throw new Error(`Block ${block.id} references missing asset ${block.assetId}`);
+      }
+      if (block.type === "image" || block.type === "file") referencedAssetIds.add(block.assetId);
+    });
+
+    for (const asset of assets) {
+      if (!referencedAssetIds.has(asset.id)) throw new Error(`Page ${page.id} asset ${asset.id} has no rendered block`);
+      if (publishedAssetIds.has(asset.id)) throw new Error(`Publication contains duplicate asset id ${asset.id} across pages`);
+      publishedAssetIds.add(asset.id);
+      if (asset.contentVersion !== contentVersion) throw new Error(`Asset ${asset.id} belongs to another content version`);
+    }
+    for (const entry of searchEntries) {
+      if (entry.contentVersion !== contentVersion || entry.pageId !== page.id) {
+        throw new Error(`Search entry ${entry.id} belongs to another page or content version`);
+      }
+      if (!anchors.has(entry.anchor)) throw new Error(`Search entry ${entry.id} references missing anchor ${entry.anchor}`);
+    }
+  }
+}
+
+function collectAnchors(blocks: Block[]): Set<string> {
+  const anchors = new Set<string>();
+  walkBlocks(blocks, (block) => {
+    anchors.add(block.anchor);
+    if (block.type === "table") for (const row of block.rows) anchors.add(anchorFromSourceId(row.id));
+    if (block.type === "bulleted-list" || block.type === "numbered-list") {
+      for (const item of block.items) anchors.add(anchorFromSourceId(item.id));
+    }
+  });
+  return anchors;
+}
+
+function walkBlocks(blocks: Block[], visit: (block: Block) => void): void {
+  for (const block of blocks) {
+    visit(block);
+    if (block.type === "columns") {
+      for (const column of block.columns) walkBlocks(column.blocks, visit);
+    }
+    if (block.type === "bulleted-list" || block.type === "numbered-list") {
+      for (const item of block.items) walkBlocks(item.children, visit);
+    }
+    if (block.type === "callout") walkBlocks(block.children, visit);
+    if (block.type === "quote") walkBlocks(block.children, visit);
+  }
+}
+
+export class IncrementalChecksum {
+  private hash = createHash("sha256");
+
+  updatePage(bundle: PagePublication): void {
+    const stableBundle = {
+      page: bundle.page,
+      blocks: bundle.blocks,
+      assets: [...bundle.assets].sort((left, right) => left.id.localeCompare(right.id)),
+      searchEntries: [...bundle.searchEntries].sort((left, right) => left.id.localeCompare(right.id)),
+    };
+    this.hash.update(JSON.stringify(stableBundle));
+  }
+
+  digest(): string {
+    return this.hash.digest("hex");
+  }
+}
+
+export function publicationChecksum(pages: PagePublication[]): string {
+  const sorted = [...pages].sort((left, right) => left.page.id.localeCompare(right.page.id));
+  const hasher = new IncrementalChecksum();
+  for (const page of sorted) {
+    hasher.updatePage(page);
+  }
+  return hasher.digest();
+}
+
+export function splitPageIntoChunks(bundle: PagePublication, maxBlocksPerChunk = 40): ChunkPublication[] {
+  const totalBlocks = bundle.blocks.length;
+
+  // 为每个 block 和 asset 注入明确的 pageId 归属信息，保证拆分后子包依然能正确序列化
+  const pageId = bundle.page.id;
+  const blocksWithSource = bundle.blocks.map((b) => Object.assign(b, { sourcePageId: pageId }));
+  const assetsWithSource = bundle.assets.map((a) => Object.assign(a, { sourcePageId: pageId }));
+
+  if (totalBlocks <= maxBlocksPerChunk && bundle.assets.length <= 20 && bundle.searchEntries.length <= 40) {
+    return [{
+      pages: [bundle.page],
+      blocks: blocksWithSource,
+      assets: assetsWithSource,
+      searchEntries: bundle.searchEntries,
+    }];
+  }
+
+  const chunks: ChunkPublication[] = [];
+
+  // 首包包含 Page 元数据及第一批 blocks
+  const firstBlocks = blocksWithSource.slice(0, maxBlocksPerChunk);
+  const firstBlockIds = new Set(firstBlocks.map((b) => b.id));
+  const firstAssets = assetsWithSource.filter((a) => firstBlockIds.has(a.id.replace(/^asset-/, "")));
+  const firstSegments = bundle.searchEntries.filter((s) => firstBlockIds.has(s.anchor.replace(/^b-/, "")));
+
+  chunks.push({
+    pages: [bundle.page],
+    blocks: firstBlocks,
+    assets: firstAssets,
+    searchEntries: firstSegments,
+  });
+
+  const remainingAssets = assetsWithSource.filter((a) => !firstBlockIds.has(a.id.replace(/^asset-/, "")));
+  const remainingSegments = bundle.searchEntries.filter((s) => !firstBlockIds.has(s.anchor.replace(/^b-/, "")));
+
+  let blockCursor = maxBlocksPerChunk;
+  let assetCursor = 0;
+  let segmentCursor = 0;
+
+  while (blockCursor < totalBlocks || assetCursor < remainingAssets.length || segmentCursor < remainingSegments.length) {
+    const nextBlocks = blocksWithSource.slice(blockCursor, blockCursor + maxBlocksPerChunk);
+    const nextAssets = remainingAssets.slice(assetCursor, assetCursor + 20);
+    const nextSegments = remainingSegments.slice(segmentCursor, segmentCursor + 40);
+
+    chunks.push({
+      pages: [],
+      blocks: nextBlocks,
+      assets: nextAssets,
+      searchEntries: nextSegments,
+    });
+
+    blockCursor += maxBlocksPerChunk;
+    assetCursor += 20;
+    segmentCursor += 40;
+  }
+
+  return chunks;
+}
+
+function sourcePageIdFromError(error: unknown): { sourcePageId?: string } {
+  if (typeof error !== "object" || error === null || !("sourcePageId" in error)) return {};
+  const sourcePageId = (error as { sourcePageId?: unknown }).sourcePageId;
+  return typeof sourcePageId === "string" ? { sourcePageId } : {};
+}
+
+function sourceBlockId(error: unknown): { sourceBlockId?: string } {
+  if (typeof error !== "object" || error === null || !("blockId" in error)) return {};
+  const blockId = error.blockId;
+  return typeof blockId === "string" ? { sourceBlockId: blockId } : {};
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function requireValue(value: string, label: string): void {
+  if (!value.trim()) throw new Error(`${label} is required`);
+}
